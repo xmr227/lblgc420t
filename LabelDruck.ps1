@@ -5,7 +5,7 @@
 # ============================================================
 $ErrorActionPreference = 'Stop'
 
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing, System.Windows.Forms
 
 # ---------- RAW-Druck ueber Windows-Spooler (winspool) ----------
 if (-not ('RawPrinter' -as [type])) {
@@ -75,6 +75,158 @@ public class RawPrinter
 "@
 }
 
+if (-not ('GrfEncoder' -as [type])) {
+Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
+using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.IO;
+using System.IO.Compression;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class GrfEncoder
+{
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    public static void FreeHBitmap(IntPtr h) { DeleteObject(h); }
+
+    public static string Encode(Bitmap src, int dstW, int dstH, bool dither, double threshold)
+    {
+        int rowBytes = (dstW + 7) / 8;
+        int total = rowBytes * dstH;
+        byte[] gray = new byte[dstW * dstH];
+
+        using (Bitmap scaled = new Bitmap(dstW, dstH, PixelFormat.Format24bppRgb))
+        {
+            using (Graphics g = Graphics.FromImage(scaled))
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.SmoothingMode = SmoothingMode.HighQuality;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.Clear(Color.White);
+                g.DrawImage(src, new Rectangle(0, 0, dstW, dstH));
+            }
+            BitmapData d = scaled.LockBits(new Rectangle(0, 0, dstW, dstH), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            try
+            {
+                int stride = d.Stride;
+                byte[] row = new byte[stride];
+                IntPtr ptr = d.Scan0;
+                for (int y = 0; y < dstH; y++)
+                {
+                    Marshal.Copy(ptr + y * stride, row, 0, stride);
+                    int baseIdx = y * dstW;
+                    for (int x = 0; x < dstW; x++)
+                    {
+                        int o = x * 3;
+                        gray[baseIdx + x] = (byte)((row[o] * 11 + row[o + 1] * 59 + row[o + 2] * 30) / 100);
+                    }
+                }
+            }
+            finally { scaled.UnlockBits(d); }
+        }
+
+        byte[] mono = new byte[total];
+        if (!dither || dstW < 2 || dstH < 2)
+        {
+            int thr = (int)Math.Max(0.0, Math.Min(255.0, threshold));
+            for (int y = 0; y < dstH; y++)
+            {
+                int srcBase = y * dstW;
+                int dstBase = y * rowBytes;
+                for (int x = 0; x < dstW; x++)
+                {
+                    if (gray[srcBase + x] < thr) mono[dstBase + (x >> 3)] |= (byte)(0x80 >> (x & 7));
+                }
+            }
+        }
+        else
+        {
+            float[] buf = new float[gray.Length];
+            for (int i = 0; i < gray.Length; i++) buf[i] = gray[i];
+            const int thr = 128;
+            for (int y = 0; y < dstH; y++)
+            {
+                for (int x = 0; x < dstW; x++)
+                {
+                    int idx = y * dstW + x;
+                    float oldv = buf[idx];
+                    float newv = (oldv < thr) ? 0f : 255f;
+                    float err = oldv - newv;
+                    if (newv == 0f) mono[y * rowBytes + (x >> 3)] |= (byte)(0x80 >> (x & 7));
+                    buf[idx] = newv;
+                    if (x + 1 < dstW) buf[idx + 1] += err * 7f / 16f;
+                    if (y + 1 < dstH)
+                    {
+                        int below = idx + dstW;
+                        if (x > 0) buf[below - 1] += err * 3f / 16f;
+                        buf[below] += err * 5f / 16f;
+                        if (x + 1 < dstW) buf[below + 1] += err * 1f / 16f;
+                    }
+                }
+            }
+        }
+
+        byte[] zlib = ZlibCompress(mono);
+        string b64 = Convert.ToBase64String(zlib);
+        return ":Z64:" + b64 + ":" + Crc16(b64);
+    }
+
+    private static byte[] ZlibCompress(byte[] data)
+    {
+        using (MemoryStream ms = new MemoryStream())
+        {
+            ms.WriteByte(0x78);
+            ms.WriteByte(0x9C);
+            using (DeflateStream ds = new DeflateStream(ms, CompressionMode.Compress, true))
+            {
+                ds.Write(data, 0, data.Length);
+            }
+            uint adler = Adler32(data);
+            ms.WriteByte((byte)(adler >> 24));
+            ms.WriteByte((byte)(adler >> 16));
+            ms.WriteByte((byte)(adler >> 8));
+            ms.WriteByte((byte)adler);
+            return ms.ToArray();
+        }
+    }
+
+    private static uint Adler32(byte[] data)
+    {
+        uint a = 1;
+        uint b = 0;
+        for (int i = 0; i < data.Length; i++)
+        {
+            a = (a + data[i]) % 65521;
+            b = (b + a) % 65521;
+        }
+        return (b << 16) | a;
+    }
+
+    private static string Crc16(string s)
+    {
+        const ushort polynomial = 0x8408;
+        ushort crc = 0xFFFF;
+        byte[] bytes = Encoding.ASCII.GetBytes(s);
+        foreach (byte b in bytes)
+        {
+            crc ^= b;
+            for (int i = 0; i < 8; i++)
+            {
+                bool lsb = (crc & 1) != 0;
+                crc >>= 1;
+                if (lsb) crc ^= polynomial;
+            }
+        }
+        return crc.ToString("X4");
+    }
+}
+"@
+}
+
 # ---------- Grundeinstellungen ----------
 $script:dpmm = 8   # GC420t = 203 dpi = 8 Punkte pro mm
 
@@ -91,12 +243,123 @@ function Get-Number([string]$t, [double]$def) {
     } catch { return $def }
 }
 
+# ---------- Bild-Unterstützung (PNG / JPG / PDF) ----------
+$script:AsTaskGeneric = $null
+$script:AsTaskAction = $null
+
+function Initialize-WinRtAwait {
+    if ($script:AsTaskGeneric) { return }
+    Add-Type -AssemblyName System.Runtime.WindowsRuntime
+    foreach ($m in [System.WindowsRuntimeSystemExtensions].GetMethods()) {
+        if ($m.Name -ne 'AsTask') { continue }
+        $ps = $m.GetParameters()
+        if ($ps.Count -ne 1) { continue }
+        $pn = $ps[0].ParameterType.Name
+        if ($pn -eq 'IAsyncOperation`1' -and -not $script:AsTaskGeneric) { $script:AsTaskGeneric = $m }
+        if ($pn -eq 'IAsyncAction' -and -not $script:AsTaskAction) { $script:AsTaskAction = $m }
+    }
+}
+
+function Wait-WinRtResult($op, [Type]$type) {
+    Initialize-WinRtAwait
+    $t = $script:AsTaskGeneric.MakeGenericMethod($type).Invoke($null, @($op))
+    $t.Wait() | Out-Null
+    return $t.Result
+}
+
+function Wait-WinRtAction($action) {
+    Initialize-WinRtAwait
+    $t = $script:AsTaskAction.Invoke($null, @($action))
+    $t.Wait() | Out-Null
+}
+
+function ConvertFrom-Pdf([string]$path) {
+    try {
+        $full = (Resolve-Path -LiteralPath $path).Path
+        $null = [Windows.Data.Pdf.PdfDocument,Windows.Data.Pdf,ContentType=WindowsRuntime]
+        $null = [Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
+        $file = Wait-WinRtResult ([Windows.Storage.StorageFile]::GetFileFromPathAsync($full)) ([Windows.Storage.StorageFile])
+        $pdf = Wait-WinRtResult ([Windows.Data.Pdf.PdfDocument]::LoadFromFileAsync($file)) ([Windows.Data.Pdf.PdfDocument])
+        if ($pdf.PageCount -lt 1) { return $null }
+        $page = $pdf.GetPage(0)
+        $mem = New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
+        try {
+            $opts = New-Object Windows.Data.Pdf.PdfPageRenderOptions
+            $opts.DestinationWidth = [System.UInt32][math]::Min(4000, [math]::Ceiling($page.Size.Width * 4))
+            Wait-WinRtAction ($page.RenderToStreamAsync($mem, $opts))
+        } catch {
+            Wait-WinRtAction ($page.RenderToStreamAsync($mem))
+        }
+        $size = [int]$mem.Size
+        if ($size -lt 8) { return $null }
+        $reader = New-Object Windows.Storage.Streams.DataReader($mem.GetInputStreamAt(0))
+        [void](Wait-WinRtResult ($reader.LoadAsync([System.UInt32]$size)) ([System.UInt32]))
+        $bytes = New-Object byte[] $size
+        $reader.ReadBytes($bytes)
+        $ms = New-Object System.IO.MemoryStream(,$bytes)
+        $img = [System.Drawing.Image]::FromStream($ms)
+        try { return New-Object System.Drawing.Bitmap($img) } finally { $img.Dispose() }
+    } catch {
+        return $null
+    }
+}
+
+function Get-ImageBitmap([string]$path) {
+    if (-not $path) { return $null }
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    $ext = [System.IO.Path]::GetExtension($path).ToLowerInvariant()
+    if ($ext -eq '.pdf') { return ConvertFrom-Pdf $path }
+    try {
+        $img = [System.Drawing.Image]::FromFile($path)
+        try { return New-Object System.Drawing.Bitmap($img) } finally { $img.Dispose() }
+    } catch {
+        return $null
+    }
+}
+
+function Get-ImageSourceForPreview {
+    $p = ''
+    try { $p = $TxtImage.Text.Trim() } catch { return $null }
+    if ($p.Length -eq 0) { return $null }
+    $key = $p
+    try {
+        if (Test-Path -LiteralPath $p) {
+            $key = (Resolve-Path -LiteralPath $p).Path + '|' + (Get-Item -LiteralPath $p).LastWriteTimeUtc.Ticks
+        }
+    } catch { }
+    if ($script:ImgCache.Key -eq $key) {
+        if ($script:ImgCache.Failed) { return $null }
+        return $script:ImgCache.Source
+    }
+    $script:ImgCache.Key = $key
+    $script:ImgCache.Failed = $false
+    $script:ImgCache.Source = $null
+    $bmp = Get-ImageBitmap $p
+    if (-not $bmp) { $script:ImgCache.Failed = $true; return $null }
+    try {
+        $src = $null
+        $hBitmap = $bmp.GetHbitmap()
+        try {
+            $src = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHBitmap($hBitmap, [IntPtr]::Zero, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+        } finally { [GrfEncoder]::FreeHBitmap($hBitmap) }
+        $src.Freeze()
+        $script:ImgCache.Source = $src
+        return $src
+    } finally {
+        $bmp.Dispose()
+    }
+}
+
+$script:ImgCache = @{ Key = ''; Source = $null; Failed = $false }
+
 function New-Zpl {
     param(
         [double]$wMm, [double]$hMm,
         [string[]]$textLines, [int]$font,
         [string]$barcode, [int]$barcodeH,
         [int]$qty, [int]$darkness, [int]$align,
+        $imgBitmap,
+        [double]$imgWidthMm, [bool]$imgDither, [int]$imgThreshold,
         [switch]$WithBorder
     )
     $pw = [int][math]::Round($wMm * $script:dpmm)
@@ -116,17 +379,43 @@ function New-Zpl {
     foreach ($l in $textLines) { $clean += (ConvertTo-ZplText $l) }
     $hasText = $false
     foreach ($l in $clean) { if ($l.Trim().Length -gt 0) { $hasText = $true; break } }
+    $hasBarcode = $barcode.Trim().Length -gt 0
 
     $y = $margin
+    if ($imgBitmap) {
+        $maxW = $pw - 2 * $margin
+        $dstW = $maxW
+        if ($imgWidthMm -gt 0) { $dstW = [int][math]::Round($imgWidthMm * $script:dpmm) }
+        if ($dstW -gt $maxW) { $dstW = $maxW }
+        if ($dstW -lt 1) { $dstW = 1 }
+        $dstH = [math]::Max(1, [int][math]::Round($dstW * $imgBitmap.Height / $imgBitmap.Width))
+        $reserve = 0
+        if ($hasText) { $reserve = [math]::Max(2 * $sz, 40) }
+        if ($hasBarcode) { $reserve = [math]::Max($reserve, $bz + 24) }
+        $capH = $ll - 2 * $margin - $reserve
+        if ($capH -lt 1) { $capH = [math]::Max(1, $ll - 2 * $margin) }
+        if ($dstH -gt $capH) {
+            $dstH = [math]::Max(1, $capH)
+            $dstW = [math]::Max(1, [int][math]::Round($dstH * $imgBitmap.Width / $imgBitmap.Height))
+        }
+        $imgX = [int](($pw - $dstW) / 2)
+        if ($imgX -lt 0) { $imgX = 0 }
+        $rowBytes = [int][math]::Ceiling($dstW / 8.0)
+        $total = $rowBytes * $dstH
+        $imgHex = [GrfEncoder]::Encode($imgBitmap, $dstW, $dstH, $imgDither, [double]$imgThreshold)
+        [void]$sb.Append("^FO$imgX,$margin^GFA,$total,$total,$rowBytes,$imgHex^FS`n")
+        $y = $margin + $dstH + 12
+    }
+
     if ($hasText) {
-        $availH = $ll - 2 * $margin
-        if ($barcode.Trim().Length -gt 0) { $availH -= ($bz + 24) }
+        $availH = $ll - $y - $margin
+        if ($hasBarcode) { $availH -= ($bz + 24) }
         $maxLines = [math]::Max(1, [int][math]::Floor($availH / $sz))
         [void]$sb.Append("^FO$margin,$y^A0N,$sz,$sz^FB$($pw - 2 * $margin),$maxLines,0,$just,0^FD$($clean -join '\&')^FS`n")
         $y += $maxLines * $sz + 12
     }
 
-    if ($barcode.Trim().Length -gt 0) {
+    if ($hasBarcode) {
         $bct = ConvertTo-ZplText $barcode
         $module = 2
         $estDots = (11 * $bct.Length + 46) * $module
@@ -141,12 +430,11 @@ function New-Zpl {
     [void]$sb.Append("^PQ$qty,0,0,N`n^XZ`n")
     return $sb.ToString()
 }
-
 # ---------- GUI ----------
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Etikettendruck für Zebra (GC420t)" Height="660" Width="1020"
+        Title="Etikettendruck für Zebra (GC420t)" Height="770" Width="1020"
         WindowStartupLocation="CenterScreen" Background="#F5F6F8">
     <Grid Margin="14">
         <Grid.ColumnDefinitions>
@@ -192,6 +480,23 @@ $xaml = @'
                 <TextBox x:Name="TxtBarcode" Width="220" Height="24" VerticalContentAlignment="Center"/>
                 <TextBlock Text="Höhe (Punkte):" VerticalAlignment="Center" Margin="14,0,6,0"/>
                 <TextBox x:Name="TxtBarcodeHeight" Width="60" Height="24" Text="100"/>
+            </StackPanel>
+
+            <TextBlock Text="Bild drucken (PNG / JPG / PDF – Seite 1)" FontWeight="SemiBold" Margin="0,14,0,4"/>
+            <DockPanel LastChildFill="True">
+                <Button x:Name="BtnImgBrowse" Content="Datei…" DockPanel.Dock="Right" Width="70" Height="24" Margin="8,0,0,0"/>
+                <TextBox x:Name="TxtImage" Height="24" VerticalContentAlignment="Center"/>
+            </DockPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <TextBlock Text="Bildbreite (mm, 0 = voll):" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <TextBox x:Name="TxtImgWidth" Width="60" Height="24" Text="0"/>
+                <TextBlock Text="Modus:" VerticalAlignment="Center" Margin="14,0,6,0"/>
+                <ComboBox x:Name="CmbImgMode" Width="150" Height="24" SelectedIndex="0">
+                    <ComboBoxItem Content="Schwarz/Weiß (Logo)"/>
+                    <ComboBoxItem Content="Dithering (Foto)"/>
+                </ComboBox>
+                <TextBlock Text="Schwelle:" VerticalAlignment="Center" Margin="14,0,6,0"/>
+                <TextBox x:Name="TxtImgThreshold" Width="50" Height="24" Text="150"/>
             </StackPanel>
 
             <TextBlock Text="Ausrichtung" FontWeight="SemiBold" Margin="0,14,0,4"/>
@@ -244,6 +549,11 @@ $BtnPrint        = $form.FindName('BtnPrint')
 $TblStatus       = $form.FindName('TblStatus')
 $TblPreviewTitle = $form.FindName('TblPreviewTitle')
 $CnvPreview      = $form.FindName('CnvPreview')
+$TxtImage        = $form.FindName('TxtImage')
+$BtnImgBrowse    = $form.FindName('BtnImgBrowse')
+$TxtImgWidth     = $form.FindName('TxtImgWidth')
+$CmbImgMode      = $form.FindName('CmbImgMode')
+$TxtImgThreshold = $form.FindName('TxtImgThreshold')
 
 $script:Presets = @(
     @{ Name = '25 x 10 mm';   W = 25;  H = 10 },
@@ -294,7 +604,36 @@ function Update-Preview {
 
         $font = [int](Get-Number $TxtFontSize.Text 48)
         $textPx = [math]::Max(6, $font * $pxPerDot)
+        $bch = [int](Get-Number $TxtBarcodeHeight.Text 100)
         $textH = 0
+
+        $imgTopY = $oy + 2
+        $imgSrc = Get-ImageSourceForPreview
+        if ($imgSrc) {
+            $imgmm = Get-Number $TxtImgWidth.Text 0
+            $maxWmm = $wMm - (32 / $script:dpmm)
+            if ($imgmm -le 0 -or $imgmm -gt $maxWmm) { $imgmm = $maxWmm }
+            $imgWpx = [math]::Max(2, $imgmm * $scale)
+            $imgHpx = $imgWpx * $imgSrc.Height / $imgSrc.Width
+            $avail = $rectH - (6 * $pxPerDot)
+            if ($TxtLines.Text.Trim().Length -gt 0) { $avail -= ($textPx + (6 * $pxPerDot)) }
+            if ($TxtBarcode.Text.Trim().Length -gt 0) { $avail -= ($bch * $pxPerDot + (10 * $pxPerDot)) }
+            if ($imgHpx -gt $avail) {
+                $imgHpx = [math]::Max(2, $avail)
+                $imgWpx = $imgHpx * $imgSrc.Width / $imgSrc.Height
+            }
+            $el = New-Object Windows.Controls.Image
+            $el.Source = $imgSrc
+            $el.Width = $imgWpx
+            $el.Height = $imgHpx
+            $el.Stretch = 'Fill'
+            $ix = $ox + ($rectW - $imgWpx) / 2
+            [Windows.Controls.Canvas]::SetLeft($el, $ix)
+            [Windows.Controls.Canvas]::SetTop($el, $oy + (2 * $pxPerDot))
+            [void]$CnvPreview.Children.Add($el)
+            $imgTopY = $oy + (2 * $pxPerDot) + $imgHpx + (4 * $pxPerDot)
+        }
+
         $allText = $TxtLines.Text
         if ($allText.Trim().Length -gt 0) {
             $lines = $allText -split "\r?\n"
@@ -307,14 +646,13 @@ function Update-Preview {
             $tb.Padding = '2'
             $tb.TextAlignment = switch ($CmbAlign.SelectedIndex) { 0 {'Left'} 2 {'Right'} default {'Center'} }
             [Windows.Controls.Canvas]::SetLeft($tb, $ox)
-            [Windows.Controls.Canvas]::SetTop($tb, $oy + 2)
+            [Windows.Controls.Canvas]::SetTop($tb, $imgTopY)
             [void]$CnvPreview.Children.Add($tb)
             $textH = ($lines.Count - 1) * $textPx * 1.35 + $textPx
         }
 
         $bc = $TxtBarcode.Text.Trim()
         if ($bc.Length -gt 0) {
-            $bch = [int](Get-Number $TxtBarcodeHeight.Text 100)
             $bcHpx = $bch * $pxPerDot
             if ($bcHpx -gt $rectH) { $bcHpx = [math]::Max(6, $rectH - 4) }
             $estDots = (11 * $bc.Length + 23) * 2
@@ -324,10 +662,10 @@ function Update-Preview {
             $x = $ox + 16 * $pxPerDot
             if ($CmbAlign.SelectedIndex -eq 1) { $x = $ox + ($rectW - $bcWpx) / 2 }
             elseif ($CmbAlign.SelectedIndex -eq 2) { $x = $ox + $rectW - 16 * $pxPerDot - $bcWpx }
-            $yTop = $oy + 2 + $textH + (4 * $pxPerDot)
+            $yTop = $imgTopY + $textH + (4 * $pxPerDot)
             $yBottom = $oy + $rectH - $bcHpx - (14 * $pxPerDot)
             $y = $yTop
-            if ($textH -le 0) { $y = [math]::Max($oy + (4 * $pxPerDot), $yBottom) }
+            if ($textH -le 0 -and $TxtImage.Text.Trim().Length -eq 0) { $y = [math]::Max($oy + (4 * $pxPerDot), $yBottom) }
             elseif ($yTop + $bcHpx -gt $oy + $rectH) { $y = $yBottom }
 
             $barX = [math]::Max($ox, $x)
@@ -360,7 +698,6 @@ function Update-Preview {
         }
     } catch { }
 }
-
 # ---------- Druckerliste ----------
 function Update-Printers {
     $sel = $CmbPrinter.SelectedItem
@@ -409,8 +746,19 @@ function Invoke-Print {
     $bch = [int](Get-Number $TxtBarcodeHeight.Text 100)
     $dark = [int]$SldDarkness.Value
 
+    $imgBitmap = $null
+    if ($TxtImage.Text.Trim().Length -gt 0) {
+        $imgBitmap = Get-ImageBitmap ($TxtImage.Text.Trim())
+        if (-not $imgBitmap) {
+            [void][System.Windows.MessageBox]::Show("Die Bild-/PDF-Datei konnte nicht geladen werden: $($TxtImage.Text)", 'Fehler', 'OK', 'Error')
+            return
+        }
+    }
     $zpl = New-Zpl -wMm $wMm -hMm $hMm -textLines $lines -font $font `
                    -barcode $TxtBarcode.Text.Trim() -barcodeH $bch `
+                   -imgBitmap $imgBitmap -imgWidthMm (Get-Number $TxtImgWidth.Text 0) `
+                   -imgDither ($CmbImgMode.SelectedIndex -eq 1) `
+                   -imgThreshold ([int](Get-Number $TxtImgThreshold.Text 150)) `
                    -qty $qty -darkness $dark -align $CmbAlign.SelectedIndex -WithBorder:$WithBorder
 
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($zpl)
@@ -429,6 +777,14 @@ function Invoke-Print {
 # ---------- Ereignisse ----------
 $BtnRefresh.Add_Click({ Update-Printers })
 
+$BtnImgBrowse.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = 'Bilder und PDF|*.png;*.jpg;*.jpeg;*.pdf|PNG-Bild|*.png|JPEG-Bild|*.jpg;*.jpeg|PDF-Dokument|*.pdf|Alle Dateien|*.*'
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $TxtImage.Text = $dlg.FileName
+    }
+})
+
 $CmbSize.Add_SelectionChanged({
     $i = $CmbSize.SelectedIndex
     if ($i -ge 0 -and $i -lt $script:Presets.Count) {
@@ -441,10 +797,11 @@ $CmbSize.Add_SelectionChanged({
     Update-Preview
 })
 
-foreach ($c in @($TxtLines, $TxtBarcode, $TxtWidth, $TxtHeight, $TxtFontSize, $TxtBarcodeHeight)) {
+foreach ($c in @($TxtLines, $TxtBarcode, $TxtWidth, $TxtHeight, $TxtFontSize, $TxtBarcodeHeight, $TxtImage, $TxtImgWidth, $TxtImgThreshold)) {
     $c.Add_TextChanged({ Update-Preview })
 }
 $CmbAlign.Add_SelectionChanged({ Update-Preview })
+$CmbImgMode.Add_SelectionChanged({ Update-Preview })
 
 $SldDarkness.Add_ValueChanged({
     $v = [int]$SldDarkness.Value
