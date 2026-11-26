@@ -716,6 +716,18 @@ function Update-Preview {
             [Windows.Controls.Canvas]::SetTop($el, $iy)
             [void]$CnvPreview.Children.Add($el)
             $script:PreviewImageEl = $el
+            $ol = New-Object Windows.Shapes.Rectangle
+            $ol.Width = $rectW
+            $ol.Height = $rectH
+            $ol.Fill = [Windows.Media.Brushes]::Transparent
+            $ol.Stroke = [Windows.Media.Brushes]::Red
+            $ol.StrokeThickness = 1.5
+            try { $ol.StrokeDashArray = '3,2' } catch { }
+            $ol.IsHitTestVisible = $false
+            [Windows.Controls.Canvas]::SetLeft($ol, $ox)
+            [Windows.Controls.Canvas]::SetTop($ol, $oy)
+            [void]$CnvPreview.Children.Add($ol)
+            $TblPreviewTitle.Text = "Vorschau ($wMm × $hMm mm) – rot gestrichelt = Etikettenrand"
             $imgTopY = $iy + $imgHpx + (4 * $pxPerDot)
             $el.Add_MouseLeftButtonDown({
                 param($s, $e)
