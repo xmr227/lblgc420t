@@ -382,13 +382,15 @@ function New-Zpl {
         $imgBitmap,
         [double]$imgWidthMm, [bool]$imgDither, [int]$imgThreshold,
         [double]$scale = 100,
+        [int]$imgOffsetX = 0,
+        [int]$imgOffsetY = 0,
         [switch]$WithBorder
     )
     $pw = [int][math]::Round($wMm * $script:dpmm)
     $ll = [int][math]::Round($hMm * $script:dpmm)
     $margin = 16
     $just = @('L','C','R')[[math]::Max(0, [math]::Min(2, $align))]
-    $k = [math]::Max(0.5, [math]::Min(2.0, $scale / 100.0))
+    $k = [math]::Max(0.5, [math]::Min(4.0, $scale / 100.0))
     $sz = [math]::Max(10, [int][math]::Round($font * $k))
     $bz = [math]::Max(20, [int][math]::Round($barcodeH * $k))
 
@@ -409,26 +411,19 @@ function New-Zpl {
         $maxW = $pw - 2 * $margin
         $dstW = [int][math]::Round($maxW * $k)
         if ($imgWidthMm -gt 0) { $dstW = [int][math]::Round($imgWidthMm * $script:dpmm * $k) }
-        if ($dstW -gt $maxW) { $dstW = $maxW }
         if ($dstW -lt 1) { $dstW = 1 }
         $dstH = [math]::Max(1, [int][math]::Round($dstW * $imgBitmap.Height / $imgBitmap.Width))
-        $reserve = 0
-        if ($hasText) { $reserve = [math]::Max(2 * $sz, 40) }
-        if ($hasBarcode) { $reserve = [math]::Max($reserve, $bz + 24) }
-        $capH = $ll - 2 * $margin - $reserve
-        if ($capH -lt 1) { $capH = [math]::Max(1, $ll - 2 * $margin) }
-        if ($dstH -gt $capH) {
-            $dstH = [math]::Max(1, $capH)
-            $dstW = [math]::Max(1, [int][math]::Round($dstH * $imgBitmap.Width / $imgBitmap.Height))
-        }
-        $imgX = [int](($pw - $dstW) / 2)
+        $imgX = [math]::Max(0, [int](($pw - $dstW) / 2)) + $imgOffsetX
+        if ($imgX -gt ($pw - 1)) { $imgX = $pw - 1 }
         if ($imgX -lt 0) { $imgX = 0 }
+        $imgY = $margin + $imgOffsetY
+        if ($imgY -gt ($ll - 1)) { $imgY = $ll - 1 }
+        if ($imgY -lt 0) { $imgY = 0 }
         $rowBytes = [int][math]::Ceiling($dstW / 8.0)
-        $total = $rowBytes * $dstH
         $imgHex = [GrfEncoder]::Encode($imgBitmap, $dstW, $dstH, $imgDither, [double]$imgThreshold)
         $stripRows = 96
         $rowsLeft = $dstH
-        $yy = $margin
+        $yy = $imgY
         $pos = 0
         while ($rowsLeft -gt 0) {
             $rows = [math]::Min($stripRows, $rowsLeft)
@@ -439,7 +434,7 @@ function New-Zpl {
             $pos += $len * 2
             $rowsLeft -= $rows
         }
-        $y = $margin + $dstH + 12
+        $y = $imgY + $dstH + 12
     }
 
     if ($hasText) {
@@ -502,9 +497,10 @@ $xaml = @'
 
             <TextBlock Text="Skalierung des Inhalts (Text, Barcode, Bild)" FontWeight="SemiBold" Margin="0,14,0,4"/>
             <StackPanel Orientation="Horizontal">
-                <Slider x:Name="SldScale" Width="220" Minimum="50" Maximum="200" Value="100" IsSnapToTickEnabled="True" TickFrequency="5"/>
+                <Slider x:Name="SldScale" Width="220" Minimum="50" Maximum="400" Value="100" IsSnapToTickEnabled="True" TickFrequency="5"/>
                 <TextBlock x:Name="TblScale" Text="100 %" VerticalAlignment="Center" Margin="10,0,0,0"/>
             </StackPanel>
+            <TextBlock Text="Über 100 % ragt der Inhalt über den Etikettenrand hinaus (wird am Rand abgeschnitten)." Margin="0,4,0,0" Foreground="#888" FontSize="11"/>
 
             <TextBlock Text="Textzeilen (eine Beschriftung pro Eingabezeile, leere Zeile = Abstand)" FontWeight="SemiBold" Margin="0,14,0,4"/>
             <DockPanel LastChildFill="True">
@@ -569,8 +565,8 @@ $xaml = @'
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <TextBlock x:Name="TblPreviewTitle" Text="Vorschau" FontWeight="SemiBold" Margin="10,8,0,4"/>
-                <Canvas x:Name="CnvPreview" Grid.Row="1" Margin="10,0,10,10" ClipToBounds="True"/>
+                <TextBlock x:Name="TblPreviewTitle" Text="Vorschau – Bild anklicken und mit der Maus verschieben" FontWeight="SemiBold" Margin="10,8,0,4"/>
+                <Canvas x:Name="CnvPreview" Grid.Row="1" Margin="10,0,10,10" ClipToBounds="False" Background="#FAFAFA"/>
             </Grid>
         </Border>
     </Grid>
@@ -655,7 +651,7 @@ function Update-Preview {
         [void]$CnvPreview.Children.Add($border)
 
         $font = [int](Get-Number $TxtFontSize.Text 48)
-        $k = [math]::Max(0.5, [math]::Min(2.0, $SldScale.Value / 100.0))
+        $k = [math]::Max(0.5, [math]::Min(4.0, $SldScale.Value / 100.0))
         $textPx = [math]::Max(6, $font * $k * $pxPerDot)
         $bch = [int][math]::Max(20, [math]::Round((Get-Number $TxtBarcodeHeight.Text 100) * $k))
         $textH = 0
@@ -663,29 +659,49 @@ function Update-Preview {
         $imgTopY = $oy + 2
         $imgSrc = Get-ImageSourceForPreview
         if ($imgSrc) {
+            if ($TxtImage.Text -ne $script:LastImgPath) {
+                $script:LastImgPath = $TxtImage.Text
+                $script:ImgOffsetX = 0
+                $script:ImgOffsetY = 0
+            }
             $imgmm = Get-Number $TxtImgWidth.Text 0
             $maxWmm = $wMm - (32 / $script:dpmm)
             if ($imgmm -le 0 -or $imgmm -gt $maxWmm) { $imgmm = $maxWmm }
             $imgWpx = [math]::Max(2, $imgmm * $scale * $k)
             $imgHpx = $imgWpx * $imgSrc.Height / $imgSrc.Width
-            $avail = $rectH - (6 * $pxPerDot)
-            if ($TxtLines.Text.Trim().Length -gt 0) { $avail -= ($textPx + (6 * $pxPerDot)) }
-            if ($TxtBarcode.Text.Trim().Length -gt 0) { $avail -= ($bch * $pxPerDot + (10 * $pxPerDot)) }
-            if ($imgHpx -gt $avail) {
-                $imgHpx = [math]::Max(2, $avail)
-                $imgWpx = $imgHpx * $imgSrc.Width / $imgSrc.Height
-            }
             $el = New-Object Windows.Controls.Image
             $el.Source = $imgSrc
             $el.Width = $imgWpx
             $el.Height = $imgHpx
             $el.Stretch = 'Fill'
+            $el.Cursor = 'Hand'
             $ix = $ox + ($rectW - $imgWpx) / 2
+            if ($ix -lt $ox) { $ix = $ox }
+            $ix += $script:ImgOffsetX * $pxPerDot
+            $iy = $oy + (2 * $pxPerDot) + $script:ImgOffsetY * $pxPerDot
+            if ($ix -gt ($ox + $rectW - 4)) { $ix = $ox + $rectW - 4 }
+            if ($ix -lt $ox) { $ix = $ox }
+            if ($iy -lt $oy) { $iy = $oy }
+            if ($iy -gt ($oy + $rectH - 4)) { $iy = $oy + $rectH - 4 }
             [Windows.Controls.Canvas]::SetLeft($el, $ix)
-            [Windows.Controls.Canvas]::SetTop($el, $oy + (2 * $pxPerDot))
+            [Windows.Controls.Canvas]::SetTop($el, $iy)
             [void]$CnvPreview.Children.Add($el)
-            $imgTopY = $oy + (2 * $pxPerDot) + $imgHpx + (4 * $pxPerDot)
+            $script:PreviewImageEl = $el
+            $imgTopY = $iy + $imgHpx + (4 * $pxPerDot)
+            $el.Add_MouseLeftButtonDown({
+                param($s, $e)
+                $p = $e.GetPosition($CnvPreview)
+                $script:ImgDrag.Active = $true
+                $script:ImgDrag.StartX = $p.X
+                $script:ImgDrag.StartY = $p.Y
+                $script:ImgDrag.BaseLeft = [Windows.Controls.Canvas]::GetLeft($s)
+                $script:ImgDrag.BaseTop = [Windows.Controls.Canvas]::GetTop($s)
+                $script:ImgDrag.BaseOffX = $script:ImgOffsetX
+                $script:ImgDrag.BaseOffY = $script:ImgOffsetY
+                [void]$CnvPreview.CaptureMouse()
+            })
         }
+        $script:LastPxPerDot = $pxPerDot
 
         $allText = $TxtLines.Text
         if ($allText.Trim().Length -gt 0) {
@@ -822,7 +838,9 @@ function Invoke-Print {
                    -imgDither ($CmbImgMode.SelectedIndex -eq 1) `
                    -imgThreshold ([int](Get-Number $TxtImgThreshold.Text 150)) `
                    -qty $qty -darkness $dark -align $CmbAlign.SelectedIndex `
-                   -scale ([double]$SldScale.Value) -WithBorder:$WithBorder
+                   -scale ([double]$SldScale.Value) `
+                   -imgOffsetX ([int]$script:ImgOffsetX) -imgOffsetY ([int]$script:ImgOffsetY) `
+                   -WithBorder:$WithBorder
 
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($zpl)
     try {
@@ -880,6 +898,34 @@ $SldDarkness.Add_ValueChanged({
 
 $SldScale.Add_ValueChanged({
     $TblScale.Text = ([string][int]$SldScale.Value) + ' %'
+    Update-Preview
+})
+
+$script:ImgOffsetX = 0
+$script:ImgOffsetY = 0
+$script:PreviewImageEl = $null
+$script:LastImgPath = $null
+$script:LastPxPerDot = 0
+$script:ImgDrag = @{ Active = $false; StartX = 0; StartY = 0; BaseLeft = 0; BaseTop = 0; BaseOffX = 0; BaseOffY = 0 }
+
+$CnvPreview.Add_MouseMove({
+    if (-not $script:ImgDrag.Active) { return }
+    $img = $script:PreviewImageEl
+    if (-not $img) { return }
+    $p = [System.Windows.Input.Mouse]::GetPosition($CnvPreview)
+    [Windows.Controls.Canvas]::SetLeft($img, $script:ImgDrag.BaseLeft + ($p.X - $script:ImgDrag.StartX))
+    [Windows.Controls.Canvas]::SetTop($img, $script:ImgDrag.BaseTop + ($p.Y - $script:ImgDrag.StartY))
+})
+
+$CnvPreview.Add_MouseLeftButtonUp({
+    if (-not $script:ImgDrag.Active) { return }
+    $script:ImgDrag.Active = $false
+    [void]$CnvPreview.ReleaseMouseCapture()
+    if ($script:LastPxPerDot -gt 0) {
+        $p = [System.Windows.Input.Mouse]::GetPosition($CnvPreview)
+        $script:ImgOffsetX = $script:ImgDrag.BaseOffX + [int][math]::Round(($p.X - $script:ImgDrag.StartX) / $script:LastPxPerDot)
+        $script:ImgOffsetY = $script:ImgDrag.BaseOffY + [int][math]::Round(($p.Y - $script:ImgDrag.StartY) / $script:LastPxPerDot)
+    }
     Update-Preview
 })
 
