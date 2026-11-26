@@ -28,8 +28,8 @@ public class RawPrinter
     [DllImport("winspool.Drv", SetLastError = true)]
     public static extern bool ClosePrinter(IntPtr hPrinter);
 
-    [DllImport("winspool.Drv", SetLastError = true, CharSet = CharSet.Ansi)]
-    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+    [DllImport("winspool.Drv", SetLastError = true)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, IntPtr di);
 
     [DllImport("winspool.Drv", SetLastError = true)]
     public static extern bool EndDocPrinter(IntPtr hPrinter);
@@ -52,7 +52,13 @@ public class RawPrinter
             DOCINFOA di = new DOCINFOA();
             di.pDocName = docName;
             di.pDataType = "RAW";
-            if (!StartDocPrinter(hPrinter, 1, di)) return false;
+            IntPtr pDi = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(DOCINFOA)));
+            try
+            {
+                Marshal.StructureToPtr(di, pDi, false);
+                if (!StartDocPrinter(hPrinter, 1, pDi)) return false;
+            }
+            finally { Marshal.FreeHGlobal(pDi); }
             try
             {
                 if (!StartPagePrinter(hPrinter)) return false;
