@@ -727,9 +727,13 @@ function Update-Preview {
 function Update-Printers {
     $sel = $CmbPrinter.SelectedItem
     $CmbPrinter.Items.Clear()
+    $all = @()
     foreach ($p in [System.Drawing.Printing.PrinterSettings]::InstalledPrinters) {
-        [void]$CmbPrinter.Items.Add([string]$p)
+        $all += [string]$p
     }
+    $zebra = @($all | Where-Object { $_ -match '(?i)zebra|gc42|zdesigner' })
+    if ($zebra.Count -gt 0) { $all = $zebra }
+    foreach ($p in $all) { [void]$CmbPrinter.Items.Add($p) }
     $idx = -1
     if ($sel) { $idx = $CmbPrinter.Items.IndexOf($sel) }
     if ($idx -lt 0) {
@@ -744,7 +748,8 @@ function Update-Printers {
 # ---------- Drucken ----------
 function Invoke-Print {
     param([switch]$WithBorder)
-    $TblStatus.Text = ''
+    try {
+    $TblStatus.Text = 'Druckauftrag wird vorbereitet…'
     $printer = $CmbPrinter.SelectedItem
     if ([string]::IsNullOrEmpty($printer)) {
         [void][System.Windows.MessageBox]::Show('Bitte zuerst einen Drucker auswählen.', 'Etikettendruck', 'OK', 'Warning')
@@ -801,6 +806,10 @@ function Invoke-Print {
     } catch {
         [void][System.Windows.MessageBox]::Show($_.Exception.Message, 'Fehler', 'OK', 'Error')
     }
+    } catch {
+        $TblStatus.Text = ''
+        [void][System.Windows.MessageBox]::Show("Unerwarteter Fehler: $($_.Exception.Message)", 'Fehler', 'OK', 'Error')
+    }
 }
 
 # ---------- Ereignisse ----------
@@ -840,7 +849,7 @@ $SldDarkness.Add_ValueChanged({
     else { $TblDarkness.Text = "$v (heller)" }
 })
 
-$BtnPrint.Add_Click({ Invoke-Print })
+$BtnPrint.Add_Click({ Invoke-Print -WithBorder:$false })
 $BtnTest.Add_Click({ Invoke-Print -WithBorder })
 
 $form.Add_Loaded({

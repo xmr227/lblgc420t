@@ -27,7 +27,10 @@ Keine Installation nötig – PowerShell 5.1 und WPF sind in Windows 10 enthalte
 
 ## Bedienung
 
-- **Drucker**: Zebra-Drucker wird automatisch vorausgewählt.
+- **Drucker**: In der Liste erscheinen nur Zebra-Drucker (z. B. „ZDesigner
+  GC420t“); alle anderen Systemdrucker werden ausgeblendet. Wird kein
+  Zebra-Drucker gefunden, zeigt das Programm zur Sicherheit alle an.
+  Der Zebra-Drucker wird automatisch vorausgewählt.
 - **Etikettengröße**: Presets (u. a. 70 × 50 mm und 100 × 150 mm) oder
   „Eigene Größe“ –
   Breite/Höhe einfach in mm eintippen.
@@ -64,6 +67,16 @@ mit dem geladenen Bild.
   stellen (z. B. 170–200), damit Grautöne nicht verlorengehen.
 - Bilder mit weißem (nicht transparentem) Hintergrund liefern die besten
   Ergebnisse; bei transparenten PNGs werden transparente Flächen schwarz.
+
+## Fehlerdiagnose beim Drucken
+
+Der Statustext unter dem Drucken-Button zeigt jeden Schritt an
+(„Druckauftrag wird vorbereitet…“ → „Gesendet: …“). Bleibt es bei
+„wird vorbereitet“ hängen oder erscheint eine Fehlermeldung, gibt der Text
+den konkreten Grund an. Erscheint „Gesendet“, hat Windows den Auftrag
+entgegengenommen – druckt der Drucker dann trotzdem nicht, prüfen Sie die
+Druckerwarteschlange (ggf. Warteschlange anhalten/leeren) und ob der Drucker
+online ist.
 
 ## Hinweise
 
