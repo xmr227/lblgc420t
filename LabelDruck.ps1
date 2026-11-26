@@ -99,7 +99,7 @@ public static class GrfEncoder
 
     public static void FreeHBitmap(IntPtr h) { DeleteObject(h); }
 
-    public static string Encode(Bitmap src, int dstW, int dstH, bool dither, double threshold)
+    public static string Encode(Bitmap src, int dstW, int dstH, bool dither, double threshold, int cropLeft, int cropTop)
     {
         int rowBytes = (dstW + 7) / 8;
         int total = rowBytes * dstH;
@@ -174,6 +174,31 @@ public static class GrfEncoder
                     }
                 }
             }
+        }
+
+        if (cropLeft > 0 || cropTop > 0)
+        {
+            if (cropLeft > dstW - 1) cropLeft = dstW - 1;
+            if (cropTop > dstH - 1) cropTop = dstH - 1;
+            int outW = dstW - cropLeft;
+            int outH = dstH - cropTop;
+            int srcRowBytes = (dstW + 7) / 8;
+            int outRowBytes = (outW + 7) / 8;
+            byte[] outBuf = new byte[outRowBytes * outH];
+            for (int y = 0; y < outH; y++)
+            {
+                int srcBase = (y + cropTop) * srcRowBytes;
+                int dstBase = y * outRowBytes;
+                for (int x = 0; x < outW; x++)
+                {
+                    int sx = x + cropLeft;
+                    if ((mono[srcBase + (sx >> 3)] & (0x80 >> (sx & 7))) != 0)
+                        outBuf[dstBase + (x >> 3)] |= (byte)(0x80 >> (x & 7));
+                }
+            }
+            mono = outBuf;
+            dstW = outW;
+            dstH = outH;
         }
 
         StringBuilder sb = new StringBuilder(mono.Length * 2);
@@ -413,16 +438,22 @@ function New-Zpl {
         if ($imgWidthMm -gt 0) { $dstW = [int][math]::Round($imgWidthMm * $script:dpmm * $k) }
         if ($dstW -lt 1) { $dstW = 1 }
         $dstH = [math]::Max(1, [int][math]::Round($dstW * $imgBitmap.Height / $imgBitmap.Width))
-        $imgX = [math]::Max(0, [int](($pw - $dstW) / 2)) + $imgOffsetX
-        if ($imgX -gt ($pw - 1)) { $imgX = $pw - 1 }
-        if ($imgX -lt 0) { $imgX = 0 }
+        $imgX = [int](($pw - $dstW) / 2) + $imgOffsetX
         $imgY = $margin + $imgOffsetY
+        $cropLeft = 0
+        $cropTop = 0
+        if ($imgX -lt 0) { $cropLeft = [math]::Min(-$imgX, $dstW - 1) }
+        if ($imgY -lt 0) { $cropTop = [math]::Min(-$imgY, $dstH - 1) }
+        if ($imgX -gt ($pw - 1)) { $imgX = $pw - 1 }
         if ($imgY -gt ($ll - 1)) { $imgY = $ll - 1 }
-        if ($imgY -lt 0) { $imgY = 0 }
-        $rowBytes = [int][math]::Ceiling($dstW / 8.0)
-        $imgHex = [GrfEncoder]::Encode($imgBitmap, $dstW, $dstH, $imgDither, [double]$imgThreshold)
+        $imgX = [math]::Max(0, $imgX)
+        $imgY = [math]::Max(0, $imgY)
+        $visW = $dstW - $cropLeft
+        $visH = $dstH - $cropTop
+        $rowBytes = [int][math]::Ceiling($visW / 8.0)
+        $imgHex = [GrfEncoder]::Encode($imgBitmap, $dstW, $dstH, $imgDither, [double]$imgThreshold, $cropLeft, $cropTop)
         $stripRows = 96
-        $rowsLeft = $dstH
+        $rowsLeft = $visH
         $yy = $imgY
         $pos = 0
         while ($rowsLeft -gt 0) {
@@ -434,7 +465,7 @@ function New-Zpl {
             $pos += $len * 2
             $rowsLeft -= $rows
         }
-        $y = $imgY + $dstH + 12
+        $y = $imgY + $visH + 12
     }
 
     if ($hasText) {
@@ -675,14 +706,12 @@ function Update-Preview {
             $el.Height = $imgHpx
             $el.Stretch = 'Fill'
             $el.Cursor = 'Hand'
-            $ix = $ox + ($rectW - $imgWpx) / 2
-            if ($ix -lt $ox) { $ix = $ox }
-            $ix += $script:ImgOffsetX * $pxPerDot
+            $ix = $ox + ($rectW - $imgWpx) / 2 + $script:ImgOffsetX * $pxPerDot
             $iy = $oy + (2 * $pxPerDot) + $script:ImgOffsetY * $pxPerDot
             if ($ix -gt ($ox + $rectW - 4)) { $ix = $ox + $rectW - 4 }
-            if ($ix -lt $ox) { $ix = $ox }
-            if ($iy -lt $oy) { $iy = $oy }
             if ($iy -gt ($oy + $rectH - 4)) { $iy = $oy + $rectH - 4 }
+            if ($ix -lt ($ox - $imgWpx + 4)) { $ix = $ox - $imgWpx + 4 }
+            if ($iy -lt ($oy - $imgHpx + 4)) { $iy = $oy - $imgHpx + 4 }
             [Windows.Controls.Canvas]::SetLeft($el, $ix)
             [Windows.Controls.Canvas]::SetTop($el, $iy)
             [void]$CnvPreview.Children.Add($el)
