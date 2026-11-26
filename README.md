@@ -28,7 +28,8 @@ Keine Installation nötig – PowerShell 5.1 und WPF sind in Windows 10 enthalte
 ## Bedienung
 
 - **Drucker**: Zebra-Drucker wird automatisch vorausgewählt.
-- **Etikettengröße**: Presets (u. a. 100 × 150 mm) oder „Eigene Größe“ –
+- **Etikettengröße**: Presets (u. a. 70 × 50 mm und 100 × 150 mm) oder
+  „Eigene Größe“ –
   Breite/Höhe einfach in mm eintippen.
 - **Textzeilen**: Eine Beschriftung pro Eingabezeile (leere Zeile = Abstand).
   Zeilenumbrüche am Etikettenrand passieren automatisch.
@@ -45,6 +46,8 @@ Keine Installation nötig – PowerShell 5.1 und WPF sind in Windows 10 enthalte
 - **Bildmodus**: „Schwarz/Weiß (Logo)" für scharfe Logos/Schrift mit
   einstellbarer Grauschwelle, oder „Dithering (Foto)" für Graustufen/Fotos
   (Floyd–Steinberg-Diffusion).
+- **Drehung**: Das Bild kann um 0° / 90° / 180° / 270° gedreht gedruckt
+  werden – die Vorschau dreht mit.
 - Text und Barcode erscheinen (falls ausgefüllt) unterhalb des Bildes.
 
 Rechts unten läuft eine **Live-Vorschau** im richtigen Seitenverhältnis, auch

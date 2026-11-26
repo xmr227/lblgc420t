@@ -327,10 +327,11 @@ function Get-ImageSourceForPreview {
     $p = ''
     try { $p = $TxtImage.Text.Trim() } catch { return $null }
     if ($p.Length -eq 0) { return $null }
-    $key = $p
+    $rot = $CmbImgRot.SelectedIndex * 90
+    $key = $p + '|' + $rot
     try {
         if (Test-Path -LiteralPath $p) {
-            $key = (Resolve-Path -LiteralPath $p).Path + '|' + (Get-Item -LiteralPath $p).LastWriteTimeUtc.Ticks
+            $key = (Resolve-Path -LiteralPath $p).Path + '|' + (Get-Item -LiteralPath $p).LastWriteTimeUtc.Ticks + '|' + $rot
         }
     } catch { }
     if ($script:ImgCache.Key -eq $key) {
@@ -349,6 +350,15 @@ function Get-ImageSourceForPreview {
             $src = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHBitmap($hBitmap, [IntPtr]::Zero, [System.Windows.Int32Rect]::Empty, [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
         } finally { [GrfEncoder]::FreeHBitmap($hBitmap) }
         $src.Freeze()
+        if ($rot -gt 0) {
+            $rotated = New-Object Windows.Media.Imaging.TransformedBitmap
+            $rotated.BeginInit()
+            $rotated.Source = $src
+            $rotated.Transform = New-Object Windows.Media.RotateTransform($rot)
+            $rotated.EndInit()
+            $rotated.Freeze()
+            $src = $rotated
+        }
         $script:ImgCache.Source = $src
         return $src
     } finally {
@@ -503,6 +513,13 @@ $xaml = @'
                 </ComboBox>
                 <TextBlock Text="Schwelle:" VerticalAlignment="Center" Margin="14,0,6,0"/>
                 <TextBox x:Name="TxtImgThreshold" Width="50" Height="24" Text="150"/>
+                <TextBlock Text="Drehung:" VerticalAlignment="Center" Margin="14,0,6,0"/>
+                <ComboBox x:Name="CmbImgRot" Width="60" Height="24" SelectedIndex="0">
+                    <ComboBoxItem Content="0°"/>
+                    <ComboBoxItem Content="90°"/>
+                    <ComboBoxItem Content="180°"/>
+                    <ComboBoxItem Content="270°"/>
+                </ComboBox>
             </StackPanel>
 
             <TextBlock Text="Ausrichtung" FontWeight="SemiBold" Margin="0,14,0,4"/>
@@ -560,6 +577,7 @@ $BtnImgBrowse    = $form.FindName('BtnImgBrowse')
 $TxtImgWidth     = $form.FindName('TxtImgWidth')
 $CmbImgMode      = $form.FindName('CmbImgMode')
 $TxtImgThreshold = $form.FindName('TxtImgThreshold')
+$CmbImgRot       = $form.FindName('CmbImgRot')
 
 $script:Presets = @(
     @{ Name = '25 x 10 mm';   W = 25;  H = 10 },
@@ -569,6 +587,7 @@ $script:Presets = @(
     @{ Name = '58 x 40 mm';   W = 58;  H = 40 },
     @{ Name = '62 x 100 mm';  W = 62;  H = 100 },
     @{ Name = '70 x 30 mm';   W = 70;  H = 30 },
+    @{ Name = '70 x 50 mm';   W = 70;  H = 50 },
     @{ Name = '100 x 50 mm';  W = 100; H = 50 },
     @{ Name = '100 x 100 mm'; W = 100; H = 100 },
     @{ Name = '100 x 150 mm'; W = 100; H = 150 },
@@ -759,6 +778,10 @@ function Invoke-Print {
             [void][System.Windows.MessageBox]::Show("Die Bild-/PDF-Datei konnte nicht geladen werden: $($TxtImage.Text)", 'Fehler', 'OK', 'Error')
             return
         }
+        $rot = $CmbImgRot.SelectedIndex * 90
+        if ($rot -gt 0) {
+            $imgBitmap.RotateFlip([System.Drawing.RotateFlipType]('Rotate' + $rot + 'FlipNone'))
+        }
     }
     $zpl = New-Zpl -wMm $wMm -hMm $hMm -textLines $lines -font $font `
                    -barcode $TxtBarcode.Text.Trim() -barcodeH $bch `
@@ -808,6 +831,7 @@ foreach ($c in @($TxtLines, $TxtBarcode, $TxtWidth, $TxtHeight, $TxtFontSize, $T
 }
 $CmbAlign.Add_SelectionChanged({ Update-Preview })
 $CmbImgMode.Add_SelectionChanged({ Update-Preview })
+$CmbImgRot.Add_SelectionChanged({ Update-Preview })
 
 $SldDarkness.Add_ValueChanged({
     $v = [int]$SldDarkness.Value
