@@ -43,6 +43,9 @@ Keine Installation nötig – PowerShell 5.1 und WPF sind in Windows 10 enthalte
   um Größe und Ausrichtung zu prüfen, ohne Etiketten zu verschwenden.
 - **Deckkraft-Anpassung**: Feinjustierung der Thermotransfer-Dunkelheit
   (`^MD −30…+30`), falls der Druck zu hell oder zu dunkel ist.
+- **Skalierung des Inhalts**: 50–200 % – vergrößert/verkleinert Text,
+  Barcode und Bild gemeinsam, falls alles „etwas zu klein“ erscheint.
+  100 % = unverändert.
 - **Bild drucken**: PNG-, JPG- und PDF-Dateien (Seite 1) direkt aufs Etikett.
   Über **Datei…** auswählen; das Bild wird automatisch auf die Etikettenbreite
   skaliert (Bildbreite in mm einstellbar, 0 = volle Breite).
@@ -59,8 +62,10 @@ mit dem geladenen Bild.
 ## Bilder drucken (PNG / JPG / PDF)
 
 - Das Programm wandelt die Grafik intern in eine 1-bit-Zebra-Rastergrafik um
-  (ZPL `^GFA` mit Z64-Kompression) – der Drucker erhält exakt die Auflösung,
-  die er physikalisch druckt (203 dpi). Kein Umweg über den Druckertreiber.
+  (ZPL `^GFA`, unkomprimiert in Streifen von je max. 96 Bildzeilen) – der
+  Drucker erhält exakt die Auflösung, die er physikalisch druckt (203 dpi).
+  Kein Umweg über den Druckertreiber, keine Kompression – maximale
+  Firmware-Kompatibilität.
 - Bei PDF wird **Seite 1** gerendert; mehrseitige PDFs bitte vorher
   zuschneiden oder als PNG speichern.
 - Für Logos/Schriften den Modus „Schwarz/Weiß" und ggf. die Schwelle höher

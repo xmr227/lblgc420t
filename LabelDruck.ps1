@@ -176,9 +176,14 @@ public static class GrfEncoder
             }
         }
 
-        byte[] zlib = ZlibCompress(mono);
-        string b64 = Convert.ToBase64String(zlib);
-        return ":Z64:" + b64 + ":" + Crc16(b64);
+        StringBuilder sb = new StringBuilder(mono.Length * 2);
+        const string hex = "0123456789ABCDEF";
+        for (int i = 0; i < mono.Length; i++)
+        {
+            sb.Append(hex[mono[i] >> 4]);
+            sb.Append(hex[mono[i] & 0x0F]);
+        }
+        return sb.ToString();
     }
 
     private static byte[] ZlibCompress(byte[] data)
@@ -376,14 +381,16 @@ function New-Zpl {
         [int]$qty, [int]$darkness, [int]$align,
         $imgBitmap,
         [double]$imgWidthMm, [bool]$imgDither, [int]$imgThreshold,
+        [double]$scale = 100,
         [switch]$WithBorder
     )
     $pw = [int][math]::Round($wMm * $script:dpmm)
     $ll = [int][math]::Round($hMm * $script:dpmm)
     $margin = 16
     $just = @('L','C','R')[[math]::Max(0, [math]::Min(2, $align))]
-    $sz = [math]::Max(10, $font)
-    $bz = [math]::Max(20, $barcodeH)
+    $k = [math]::Max(0.5, [math]::Min(2.0, $scale / 100.0))
+    $sz = [math]::Max(10, [int][math]::Round($font * $k))
+    $bz = [math]::Max(20, [int][math]::Round($barcodeH * $k))
 
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append("^XA`n^CI28`n")
@@ -400,8 +407,8 @@ function New-Zpl {
     $y = $margin
     if ($imgBitmap) {
         $maxW = $pw - 2 * $margin
-        $dstW = $maxW
-        if ($imgWidthMm -gt 0) { $dstW = [int][math]::Round($imgWidthMm * $script:dpmm) }
+        $dstW = [int][math]::Round($maxW * $k)
+        if ($imgWidthMm -gt 0) { $dstW = [int][math]::Round($imgWidthMm * $script:dpmm * $k) }
         if ($dstW -gt $maxW) { $dstW = $maxW }
         if ($dstW -lt 1) { $dstW = 1 }
         $dstH = [math]::Max(1, [int][math]::Round($dstW * $imgBitmap.Height / $imgBitmap.Width))
@@ -419,7 +426,19 @@ function New-Zpl {
         $rowBytes = [int][math]::Ceiling($dstW / 8.0)
         $total = $rowBytes * $dstH
         $imgHex = [GrfEncoder]::Encode($imgBitmap, $dstW, $dstH, $imgDither, [double]$imgThreshold)
-        [void]$sb.Append("^FO$imgX,$margin^GFA,$total,$total,$rowBytes,$imgHex^FS`n")
+        $stripRows = 96
+        $rowsLeft = $dstH
+        $yy = $margin
+        $pos = 0
+        while ($rowsLeft -gt 0) {
+            $rows = [math]::Min($stripRows, $rowsLeft)
+            $len = $rows * $rowBytes
+            $part = $imgHex.Substring($pos, $len * 2)
+            [void]$sb.Append("^FO$imgX,$yy^GFA,$len,$len,$rowBytes,$part^FS`n")
+            $yy += $rows
+            $pos += $len * 2
+            $rowsLeft -= $rows
+        }
         $y = $margin + $dstH + 12
     }
 
@@ -433,7 +452,7 @@ function New-Zpl {
 
     if ($hasBarcode) {
         $bct = ConvertTo-ZplText $barcode
-        $module = 2
+        $module = [math]::Max(1, [int][math]::Round(2 * $k))
         $estDots = (11 * $bct.Length + 46) * $module
         if ($estDots -gt ($pw - 2 * $margin)) { $module = 1; $estDots = (11 * $bct.Length + 46) * $module }
         $x = $margin
@@ -479,6 +498,12 @@ $xaml = @'
             <StackPanel Orientation="Horizontal">
                 <Slider x:Name="SldDarkness" Width="220" Minimum="-30" Maximum="30" Value="0" IsSnapToTickEnabled="True" TickFrequency="5"/>
                 <TextBlock x:Name="TblDarkness" Text="0 (Standard)" VerticalAlignment="Center" Margin="10,0,0,0"/>
+            </StackPanel>
+
+            <TextBlock Text="Skalierung des Inhalts (Text, Barcode, Bild)" FontWeight="SemiBold" Margin="0,14,0,4"/>
+            <StackPanel Orientation="Horizontal">
+                <Slider x:Name="SldScale" Width="220" Minimum="50" Maximum="200" Value="100" IsSnapToTickEnabled="True" TickFrequency="5"/>
+                <TextBlock x:Name="TblScale" Text="100 %" VerticalAlignment="Center" Margin="10,0,0,0"/>
             </StackPanel>
 
             <TextBlock Text="Textzeilen (eine Beschriftung pro Eingabezeile, leere Zeile = Abstand)" FontWeight="SemiBold" Margin="0,14,0,4"/>
@@ -561,6 +586,8 @@ $TxtWidth        = $form.FindName('TxtWidth')
 $TxtHeight       = $form.FindName('TxtHeight')
 $SldDarkness     = $form.FindName('SldDarkness')
 $TblDarkness     = $form.FindName('TblDarkness')
+$SldScale        = $form.FindName('SldScale')
+$TblScale        = $form.FindName('TblScale')
 $TxtLines        = $form.FindName('TxtLines')
 $TxtFontSize     = $form.FindName('TxtFontSize')
 $TxtBarcode      = $form.FindName('TxtBarcode')
@@ -628,8 +655,9 @@ function Update-Preview {
         [void]$CnvPreview.Children.Add($border)
 
         $font = [int](Get-Number $TxtFontSize.Text 48)
-        $textPx = [math]::Max(6, $font * $pxPerDot)
-        $bch = [int](Get-Number $TxtBarcodeHeight.Text 100)
+        $k = [math]::Max(0.5, [math]::Min(2.0, $SldScale.Value / 100.0))
+        $textPx = [math]::Max(6, $font * $k * $pxPerDot)
+        $bch = [int][math]::Max(20, [math]::Round((Get-Number $TxtBarcodeHeight.Text 100) * $k))
         $textH = 0
 
         $imgTopY = $oy + 2
@@ -638,7 +666,7 @@ function Update-Preview {
             $imgmm = Get-Number $TxtImgWidth.Text 0
             $maxWmm = $wMm - (32 / $script:dpmm)
             if ($imgmm -le 0 -or $imgmm -gt $maxWmm) { $imgmm = $maxWmm }
-            $imgWpx = [math]::Max(2, $imgmm * $scale)
+            $imgWpx = [math]::Max(2, $imgmm * $scale * $k)
             $imgHpx = $imgWpx * $imgSrc.Height / $imgSrc.Width
             $avail = $rectH - (6 * $pxPerDot)
             if ($TxtLines.Text.Trim().Length -gt 0) { $avail -= ($textPx + (6 * $pxPerDot)) }
@@ -682,7 +710,7 @@ function Update-Preview {
             if ($bcHpx -gt $rectH) { $bcHpx = [math]::Max(6, $rectH - 4) }
             $estDots = (11 * $bc.Length + 23) * 2
             $maxDots = ($wMm * $script:dpmm) - 32
-            $modulePx = [math]::Max(1.0, 2 * $pxPerDot)
+            $modulePx = [math]::Max(1.0, 2 * $k * $pxPerDot)
             $bcWpx = $estDots * $pxPerDot
             $x = $ox + 16 * $pxPerDot
             if ($CmbAlign.SelectedIndex -eq 1) { $x = $ox + ($rectW - $bcWpx) / 2 }
@@ -793,7 +821,8 @@ function Invoke-Print {
                    -imgBitmap $imgBitmap -imgWidthMm (Get-Number $TxtImgWidth.Text 0) `
                    -imgDither ($CmbImgMode.SelectedIndex -eq 1) `
                    -imgThreshold ([int](Get-Number $TxtImgThreshold.Text 150)) `
-                   -qty $qty -darkness $dark -align $CmbAlign.SelectedIndex -WithBorder:$WithBorder
+                   -qty $qty -darkness $dark -align $CmbAlign.SelectedIndex `
+                   -scale ([double]$SldScale.Value) -WithBorder:$WithBorder
 
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($zpl)
     try {
@@ -847,6 +876,11 @@ $SldDarkness.Add_ValueChanged({
     if ($v -eq 0) { $TblDarkness.Text = '0 (Standard)' }
     elseif ($v -gt 0) { $TblDarkness.Text = "+$v (dunkler)" }
     else { $TblDarkness.Text = "$v (heller)" }
+})
+
+$SldScale.Add_ValueChanged({
+    $TblScale.Text = ([string][int]$SldScale.Value) + ' %'
+    Update-Preview
 })
 
 $BtnPrint.Add_Click({ Invoke-Print -WithBorder:$false })
