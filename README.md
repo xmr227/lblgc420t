@@ -59,6 +59,9 @@ Keine Installation nötig – PowerShell 5.1 und WPF sind in Windows 10 enthalte
 - **Bild verschieben**: In der Live-Vorschau das Bild mit der Maus anklicken
   und an die gewünschte Stelle ziehen – die Position wird so auch gedruckt.
   Beim Laden eines neuen Bildes wird die Position zurückgesetzt.
+- **Etikettenrand**: Solange ein Bild geladen ist, zeigt die Vorschau den
+  Etikettenrand als **rot gestrichelte Linie** über dem Bild an – so sieht
+  man beim Zoomen und Verschieben genau, welcher Teil aufs Etikett kommt.
 - Text und Barcode erscheinen (falls ausgefüllt) unterhalb des Bildes.
 
 Rechts unten läuft eine **Live-Vorschau** im richtigen Seitenverhältnis, auch
