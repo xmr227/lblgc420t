@@ -54,6 +54,12 @@ Keine Installation nötig – PowerShell 5.1 und WPF sind in Windows 10 enthalte
 - **Bildmodus**: „Schwarz/Weiß (Logo)" für scharfe Logos/Schrift mit
   einstellbarer Grauschwelle, oder „Dithering (Foto)" für Graustufen/Fotos
   (Floyd–Steinberg-Diffusion).
+- **Auto-Kontrast**: Hellt dunkle Farbfelder automatisch auf (das Bild wird
+  intern in Graustufen umgewandelt und der Kontrast auf den vollen Bereich
+  gespreizt) – damit bleibt Text auf dunklem Hintergrund lesbar statt in
+  einem schwarzen Block zu verschwinden. Bei Bedarf abschaltbar.
+- **Helligkeit**: −100…+100, hebt oder senkt die Graustufen vor dem Druck
+  (z. B. +40, wenn trotz Auto-Kontrast noch zu viel schwarz gedruckt wird).
 - **Drehung**: Das Bild kann um 0° / 90° / 180° / 270° gedreht gedruckt
   werden – die Vorschau dreht mit.
 - **Bild verschieben**: In der Live-Vorschau das Bild mit der Maus anklicken

@@ -99,7 +99,7 @@ public static class GrfEncoder
 
     public static void FreeHBitmap(IntPtr h) { DeleteObject(h); }
 
-    public static string Encode(Bitmap src, int dstW, int dstH, bool dither, double threshold, int cropLeft, int cropTop)
+    public static string Encode(Bitmap src, int dstW, int dstH, bool dither, double threshold, int cropLeft, int cropTop, bool autoContrast, int brightness)
     {
         int rowBytes = (dstW + 7) / 8;
         int total = rowBytes * dstH;
@@ -133,6 +133,37 @@ public static class GrfEncoder
                 }
             }
             finally { scaled.UnlockBits(d); }
+        }
+
+        if (autoContrast)
+        {
+            int[] hist = new int[256];
+            for (int i = 0; i < gray.Length; i++) hist[gray[i]]++;
+            long clipCount = gray.Length / 100;
+            long acc = 0; int lo = 0;
+            for (int i = 0; i < 256; i++) { acc += hist[i]; if (acc > clipCount) { lo = i; break; } }
+            acc = 0; int hi = 255;
+            for (int i = 255; i >= 0; i--) { acc += hist[i]; if (acc > clipCount) { hi = i; break; } }
+            if (hi - lo > 10)
+            {
+                double s = 255.0 / (hi - lo);
+                for (int i = 0; i < gray.Length; i++)
+                {
+                    int v = (int)Math.Round((gray[i] - lo) * s);
+                    if (v < 0) v = 0; else if (v > 255) v = 255;
+                    gray[i] = (byte)v;
+                }
+            }
+        }
+        if (brightness != 0)
+        {
+            int b = Math.Max(-100, Math.Min(100, brightness));
+            for (int i = 0; i < gray.Length; i++)
+            {
+                int v = gray[i] + b;
+                if (v < 0) v = 0; else if (v > 255) v = 255;
+                gray[i] = (byte)v;
+            }
         }
 
         byte[] mono = new byte[total];
@@ -409,6 +440,8 @@ function New-Zpl {
         [double]$scale = 100,
         [int]$imgOffsetX = 0,
         [int]$imgOffsetY = 0,
+        [bool]$imgAuto = $true,
+        [int]$imgBrightness = 0,
         [switch]$WithBorder
     )
     $pw = [int][math]::Round($wMm * $script:dpmm)
@@ -451,7 +484,7 @@ function New-Zpl {
         $visW = $dstW - $cropLeft
         $visH = $dstH - $cropTop
         $rowBytes = [int][math]::Ceiling($visW / 8.0)
-        $imgHex = [GrfEncoder]::Encode($imgBitmap, $dstW, $dstH, $imgDither, [double]$imgThreshold, $cropLeft, $cropTop)
+        $imgHex = [GrfEncoder]::Encode($imgBitmap, $dstW, $dstH, $imgDither, [double]$imgThreshold, $cropLeft, $cropTop, [bool]$imgAuto, [int]$imgBrightness)
         $stripRows = 96
         $rowsLeft = $visH
         $yy = $imgY
@@ -573,6 +606,12 @@ $xaml = @'
                     <ComboBoxItem Content="270°"/>
                 </ComboBox>
             </StackPanel>
+            <CheckBox x:Name="CkbAutoContrast" Content="Auto-Kontrast: dunkle Farbfelder aufhellen, damit Text lesbar bleibt" IsChecked="True" Margin="0,8,0,0"/>
+            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                <TextBlock Text="Helligkeit:" VerticalAlignment="Center"/>
+                <Slider x:Name="SldBrightness" Width="180" Minimum="-100" Maximum="100" Value="0" IsSnapToTickEnabled="True" TickFrequency="10" Margin="8,0,0,0"/>
+                <TextBlock x:Name="TblBrightness" Text="0" VerticalAlignment="Center" Margin="8,0,0,0"/>
+            </StackPanel>
 
             <TextBlock Text="Ausrichtung" FontWeight="SemiBold" Margin="0,14,0,4"/>
             <StackPanel Orientation="Horizontal">
@@ -632,6 +671,9 @@ $TxtImgWidth     = $form.FindName('TxtImgWidth')
 $CmbImgMode      = $form.FindName('CmbImgMode')
 $TxtImgThreshold = $form.FindName('TxtImgThreshold')
 $CmbImgRot       = $form.FindName('CmbImgRot')
+$CkbAutoContrast = $form.FindName('CkbAutoContrast')
+$SldBrightness   = $form.FindName('SldBrightness')
+$TblBrightness   = $form.FindName('TblBrightness')
 
 $script:Presets = @(
     @{ Name = '25 x 10 mm';   W = 25;  H = 10 },
@@ -881,6 +923,7 @@ function Invoke-Print {
                    -qty $qty -darkness $dark -align $CmbAlign.SelectedIndex `
                    -scale ([double]$SldScale.Value) `
                    -imgOffsetX ([int]$script:ImgOffsetX) -imgOffsetY ([int]$script:ImgOffsetY) `
+                   -imgAuto ([bool]$CkbAutoContrast.IsChecked) -imgBrightness ([int]$SldBrightness.Value) `
                    -WithBorder:$WithBorder
 
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($zpl)
@@ -929,6 +972,11 @@ foreach ($c in @($TxtLines, $TxtBarcode, $TxtWidth, $TxtHeight, $TxtFontSize, $T
 $CmbAlign.Add_SelectionChanged({ Update-Preview })
 $CmbImgMode.Add_SelectionChanged({ Update-Preview })
 $CmbImgRot.Add_SelectionChanged({ Update-Preview })
+$CkbAutoContrast.Add_Click({ Update-Preview })
+
+$SldBrightness.Add_ValueChanged({
+    $TblBrightness.Text = [string][int]$SldBrightness.Value
+})
 
 $SldDarkness.Add_ValueChanged({
     $v = [int]$SldDarkness.Value
